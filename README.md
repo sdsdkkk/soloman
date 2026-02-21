@@ -9,18 +9,21 @@ Current state:
 
 Sample code:
 
-```print 1+1;
+```
+print 1+1;
 print 5*6;
 ```
 
 How to build compiler:
 
-```cargo build
+```
+cargo build
 ```
 
 How to compile Soloman program:
 
-```soloman test/test-prog.sol
+```
+soloman test/test-prog.sol
 nasm -f elf64 out.asm -o out.o
 ld out.o -o out
 ```

@@ -24,6 +24,4 @@ How to compile Soloman program:
 
 ```
 soloman test/test-prog.sol
-nasm -f elf64 out.asm -o out.o
-ld out.o -o out
 ```

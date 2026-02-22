@@ -1,420 +1,195 @@
+use inkwell::context::Context;
+use inkwell::OptimizationLevel;
 use std::env;
 use std::fs;
 
-// ======================
-// TOKEN
-// ======================
-
-#[derive(Debug, Clone, PartialEq)]
-enum Token {
-    Int(i64),
-    Plus,
-    Minus,
-    Mul,
-    Div,
-    LParen,
-    RParen,
-    Print,
-    Semi,
-    EOF,
-}
-
-// ======================
-// LEXER
-// ======================
-
-struct Lexer {
-    input: Vec<char>,
-    pos: usize,
-}
-
-impl Lexer {
-    fn new(input: String) -> Self {
-        Self {
-            input: input.chars().collect(),
-            pos: 0,
-        }
-    }
-
-    fn current(&self) -> Option<char> {
-        self.input.get(self.pos).copied()
-    }
-
-    fn advance(&mut self) {
-        self.pos += 1;
-    }
-
-    fn skip_whitespace(&mut self) {
-        while let Some(c) = self.current() {
-            if c.is_whitespace() {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn integer(&mut self) -> i64 {
-        let start = self.pos;
-
-        while let Some(c) = self.current() {
-            if c.is_ascii_digit() {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-
-        self.input[start..self.pos]
-            .iter()
-            .collect::<String>()
-            .parse()
-            .unwrap()
-    }
-
-    fn next_token(&mut self) -> Token {
-        self.skip_whitespace();
-
-        match self.current() {
-            Some(c) if c.is_ascii_digit() => Token::Int(self.integer()),
-
-            Some('+') => {
-                self.advance();
-                Token::Plus
-            }
-
-            Some('-') => {
-                self.advance();
-                Token::Minus
-            }
-
-            Some('*') => {
-                self.advance();
-                Token::Mul
-            }
-
-            Some('/') => {
-                self.advance();
-                Token::Div
-            }
-
-            Some('(') => {
-                self.advance();
-                Token::LParen
-            }
-
-            Some(')') => {
-                self.advance();
-                Token::RParen
-            }
-
-            Some(';') => {
-                self.advance();
-                Token::Semi
-            }
-
-            Some('p') => {
-                let remaining: String =
-                    self.input[self.pos..].iter().collect();
-
-                if remaining.starts_with("print") {
-                    self.pos += 5;
-                    Token::Print
-                } else {
-                    panic!("Unexpected token");
-                }
-            }
-
-            None => Token::EOF,
-
-            _ => panic!("Invalid character"),
-        }
-    }
-}
-
-// ======================
+// =====================
 // AST
-// ======================
+// =====================
 
+#[derive(Debug)]
 enum Expr {
-    Num(i64),
-    BinOp(Box<Expr>, Token, Box<Expr>),
+    Number(i64),
+    Add(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
 }
 
+#[derive(Debug)]
 enum Stmt {
     Print(Expr),
 }
 
+#[derive(Debug)]
 struct Program {
-    stmts: Vec<Stmt>,
+    statements: Vec<Stmt>,
 }
 
-// ======================
-// PARSER
-// ======================
+// =====================
+// VERY SIMPLE PARSER
+// (for demonstration)
+// =====================
 
-struct Parser {
-    lexer: Lexer,
-    current: Token,
+fn parse(source: &str) -> Program {
+
+    let mut statements = Vec::new();
+
+    for line in source.lines() {
+
+        let line = line.trim();
+
+        if line.starts_with("print ") {
+
+            let expr_str = line
+                .strip_prefix("print ")
+                .unwrap()
+                .strip_suffix(";")
+                .unwrap();
+
+            let expr = parse_expr(expr_str);
+
+            statements.push(Stmt::Print(expr));
+        }
+    }
+
+    Program { statements }
 }
 
-impl Parser {
-    fn new(mut lexer: Lexer) -> Self {
-        let current = lexer.next_token();
-        Self { lexer, current }
+fn parse_expr(s: &str) -> Expr {
+
+    if let Some(pos) = s.find('+') {
+
+        return Expr::Add(
+            Box::new(parse_expr(&s[..pos])),
+            Box::new(parse_expr(&s[pos+1..]))
+        );
     }
 
-    fn eat(&mut self, expected: Token) {
-        if std::mem::discriminant(&self.current)
-            == std::mem::discriminant(&expected)
-        {
-            self.current = self.lexer.next_token();
-        } else {
-            panic!("Unexpected token");
-        }
+    if let Some(pos) = s.find('*') {
+
+        return Expr::Mul(
+            Box::new(parse_expr(&s[..pos])),
+            Box::new(parse_expr(&s[pos+1..]))
+        );
     }
 
-    fn factor(&mut self) -> Expr {
-        match self.current.clone() {
-            Token::Int(n) => {
-                self.eat(Token::Int(0));
-                Expr::Num(n)
-            }
-
-            Token::LParen => {
-                self.eat(Token::LParen);
-                let expr = self.expr();
-                self.eat(Token::RParen);
-                expr
-            }
-
-            _ => panic!("Expected number"),
-        }
-    }
-
-    fn term(&mut self) -> Expr {
-        let mut node = self.factor();
-
-        loop {
-            match self.current {
-                Token::Mul => {
-                    self.eat(Token::Mul);
-                    node = Expr::BinOp(
-                        Box::new(node),
-                        Token::Mul,
-                        Box::new(self.factor()),
-                    );
-                }
-
-                Token::Div => {
-                    self.eat(Token::Div);
-                    node = Expr::BinOp(
-                        Box::new(node),
-                        Token::Div,
-                        Box::new(self.factor()),
-                    );
-                }
-
-                _ => break,
-            }
-        }
-
-        node
-    }
-
-    fn expr(&mut self) -> Expr {
-        let mut node = self.term();
-
-        loop {
-            match self.current {
-                Token::Plus => {
-                    self.eat(Token::Plus);
-                    node = Expr::BinOp(
-                        Box::new(node),
-                        Token::Plus,
-                        Box::new(self.term()),
-                    );
-                }
-
-                Token::Minus => {
-                    self.eat(Token::Minus);
-                    node = Expr::BinOp(
-                        Box::new(node),
-                        Token::Minus,
-                        Box::new(self.term()),
-                    );
-                }
-
-                _ => break,
-            }
-        }
-
-        node
-    }
-
-    fn statement(&mut self) -> Stmt {
-        self.eat(Token::Print);
-        let expr = self.expr();
-        self.eat(Token::Semi);
-        Stmt::Print(expr)
-    }
-
-    fn program(&mut self) -> Program {
-        let mut stmts = Vec::new();
-
-        while self.current != Token::EOF {
-            stmts.push(self.statement());
-        }
-
-        Program { stmts }
-    }
+    Expr::Number(s.trim().parse().unwrap())
 }
 
-// ======================
-// CODEGEN
-// ======================
+// =====================
+// LLVM CODEGEN
+// =====================
 
-struct CodeGen {
-    output: String,
-}
+fn compile(program: Program, output: &str) {
 
-impl CodeGen {
-    fn new() -> Self {
-        Self {
-            output: String::new(),
-        }
-    }
+    let context = Context::create();
+    let module = context.create_module("soloman");
+    let builder = context.create_builder();
 
-    fn emit(&mut self, s: &str) {
-        self.output.push_str(s);
-        self.output.push('\n');
-    }
+    let i64_type = context.i64_type();
 
-    fn gen_expr(&mut self, expr: &Expr) {
-        match expr {
-            Expr::Num(n) => {
-                self.emit(&format!("    mov rax, {}", n));
-            }
+    // main function
+    let main_type = i64_type.fn_type(&[], false);
+    let main_fn = module.add_function("main", main_type, None);
 
-            Expr::BinOp(left, op, right) => {
-                self.gen_expr(left);
-                self.emit("    push rax");
+    let basic_block = context.append_basic_block(main_fn, "entry");
+    builder.position_at_end(basic_block);
 
-                self.gen_expr(right);
-                self.emit("    pop rbx");
+    // printf
+    let i8ptr = context.i8_type().ptr_type(Default::default());
 
-                match op {
-                    Token::Plus =>
-                        self.emit("    add rax, rbx"),
+    let printf_type =
+        context.i32_type().fn_type(&[i8ptr.into()], true);
 
-                    Token::Minus => {
-                        self.emit("    sub rbx, rax");
-                        self.emit("    mov rax, rbx");
-                    }
+    let printf =
+        module.add_function("printf", printf_type, None);
 
-                    Token::Mul =>
-                        self.emit("    imul rax, rbx"),
+    // format string
+    let format_str =
+        builder.build_global_string_ptr("%ld\n", "fmt");
 
-                    Token::Div => {
-                        self.emit("    mov rdx, 0");
-                        self.emit("    mov rcx, rax");
-                        self.emit("    mov rax, rbx");
-                        self.emit("    idiv rcx");
-                    }
+    for stmt in program.statements {
 
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
+
             Stmt::Print(expr) => {
-                self.gen_expr(expr);
-                self.emit("    mov rdi, rax");
-                self.emit("    call print_int");
+
+                let value =
+                    compile_expr(&context, &builder, expr);
+
+                builder.build_call(
+                    printf,
+                    &[
+                        format_str.as_pointer_value().into(),
+                        value.into()
+                    ],
+                    "printf"
+                );
             }
         }
     }
 
-    fn generate(mut self, program: Program) -> String {
+    builder.build_return(Some(&i64_type.const_int(0, false)));
 
-        self.emit("global _start");
-        self.emit("section .text");
+    module.print_to_file("out.ll").unwrap();
 
-        self.emit("print_int:");
-        self.emit("    mov rcx, buffer+20");
-        self.emit("    mov rbx, 10");
-        self.emit("    mov rax, rdi");
+    // Compile to executable
+    std::process::Command::new("clang")
+        .args(&["out.ll", "-o", output])
+        .status()
+        .unwrap();
+}
 
-        self.emit("convert:");
-        self.emit("    xor rdx, rdx");
-        self.emit("    div rbx");
-        self.emit("    add dl, '0'");
-        self.emit("    dec rcx");
-        self.emit("    mov [rcx], dl");
-        self.emit("    test rax, rax");
-        self.emit("    jnz convert");
+fn compile_expr<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    expr: Expr,
+) -> inkwell::values::IntValue<'ctx> {
 
-        self.emit("    mov rax, 1");
-        self.emit("    mov rdi, 1");
-        self.emit("    mov rsi, rcx");
-        self.emit("    mov rdx, buffer+20");
-        self.emit("    sub rdx, rcx");
-        self.emit("    syscall");
+    let i64_type = context.i64_type();
 
-        self.emit("    mov rax, 1");
-        self.emit("    mov rdi, 1");
-        self.emit("    mov rsi, newline");
-        self.emit("    mov rdx, 1");
-        self.emit("    syscall");
+    match expr {
 
-        self.emit("    ret");
+        Expr::Number(n) =>
+            i64_type.const_int(n as u64, false),
 
-        self.emit("_start:");
+        Expr::Add(a, b) => {
 
-        for stmt in program.stmts {
-            self.gen_stmt(&stmt);
+            let left = compile_expr(context, builder, *a);
+            let right = compile_expr(context, builder, *b);
+
+            builder.build_int_add(left, right, "addtmp")
         }
 
-        self.emit("    mov rax, 60");
-        self.emit("    xor rdi, rdi");
-        self.emit("    syscall");
+        Expr::Mul(a, b) => {
 
-        self.emit("section .bss");
-        self.emit("buffer resb 21");
+            let left = compile_expr(context, builder, *a);
+            let right = compile_expr(context, builder, *b);
 
-        self.emit("section .data");
-        self.emit("newline db 10");
-
-        self.output
+            builder.build_int_mul(left, right, "multmp")
+        }
     }
 }
 
-// ======================
+// =====================
 // MAIN
-// ======================
+// =====================
 
 fn main() {
 
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: compiler <file>");
+
+        println!("Usage: soloman <file>");
         return;
     }
 
-    let source = fs::read_to_string(&args[1]).unwrap();
+    let source =
+        fs::read_to_string(&args[1]).unwrap();
 
-    let lexer = Lexer::new(source);
-    let mut parser = Parser::new(lexer);
+    let program = parse(&source);
 
-    let program = parser.program();
+    compile(program, "out");
 
-    let asm = CodeGen::new().generate(program);
-
-    fs::write("out.asm", asm).unwrap();
-
-    println!("Compiled to out.asm");
+    println!("Soloman compiled successfully.");
 }

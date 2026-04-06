@@ -5,16 +5,31 @@ use std::str::CharIndices;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
+    // literals / identifiers
     Ident(String),
     Int(i64),
     Str(String),
+
+    // keywords
+    KwFn,
+    KwLet,
+    KwReturn,
+    KwImport,
+    KwObject,
+
+    // operators / punctuation
     Plus,
     Minus,
     Star,
     Slash,
     Eq,
+    Colon,
+    Dot,
+    Arrow,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     Comma,
     Semi,
     Eof,
@@ -158,8 +173,16 @@ impl<'a> Lexer<'a> {
             }
         }
         let name = self.src[start..end].to_string();
+        let kind = match name.as_str() {
+            "fn" => TokenKind::KwFn,
+            "let" => TokenKind::KwLet,
+            "return" => TokenKind::KwReturn,
+            "import" => TokenKind::KwImport,
+            "object" => TokenKind::KwObject,
+            _ => TokenKind::Ident(name),
+        };
         Token {
-            kind: TokenKind::Ident(name),
+            kind,
             line: start_line,
             col: start_col,
         }
@@ -191,6 +214,14 @@ impl<'a> Lexer<'a> {
             }
             '-' => {
                 self.bump();
+                if matches!(self.peek_char(), Some('>')) {
+                    self.bump();
+                    return Ok(Token {
+                        kind: TokenKind::Arrow,
+                        line: start_line,
+                        col: start_col,
+                    });
+                }
                 Ok(Token {
                     kind: TokenKind::Minus,
                     line: start_line,
@@ -221,6 +252,22 @@ impl<'a> Lexer<'a> {
                     col: start_col,
                 })
             }
+            ':' => {
+                self.bump();
+                Ok(Token {
+                    kind: TokenKind::Colon,
+                    line: start_line,
+                    col: start_col,
+                })
+            }
+            '.' => {
+                self.bump();
+                Ok(Token {
+                    kind: TokenKind::Dot,
+                    line: start_line,
+                    col: start_col,
+                })
+            }
             '(' => {
                 self.bump();
                 Ok(Token {
@@ -233,6 +280,22 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 Ok(Token {
                     kind: TokenKind::RParen,
+                    line: start_line,
+                    col: start_col,
+                })
+            }
+            '{' => {
+                self.bump();
+                Ok(Token {
+                    kind: TokenKind::LBrace,
+                    line: start_line,
+                    col: start_col,
+                })
+            }
+            '}' => {
+                self.bump();
+                Ok(Token {
+                    kind: TokenKind::RBrace,
                     line: start_line,
                     col: start_col,
                 })

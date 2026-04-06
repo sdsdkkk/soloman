@@ -2,11 +2,11 @@
 print("Hello from Soloman");
 eprint("(this line is stderr)");
 
-a = 40 + 2;
+let a: Int = 40 + 2;
 print(a);
 
-s = "len test: ";
+let s: Str = "len test: ";
 print(len(s) + 3);
 
-line = read_line();
+let line: Str = read_line();
 print("You typed: " + line);

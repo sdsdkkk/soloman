@@ -8,7 +8,7 @@ mod typecheck;
 
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use inkwell::context::Context;
@@ -34,13 +34,11 @@ fn main() {
 }
 
 fn drive(cmd: &str, path: &Path) -> Result<(), String> {
-    let src = fs::read_to_string(path).map_err(|e| e.to_string())?;
     if path.extension().and_then(|s| s.to_str()) != Some("sol") {
         return Err("source file should use the .sol extension".to_string());
     }
 
-    let tokens = lexer::tokenize(&src)?;
-    let program = parser::Parser::new(tokens).parse_program()?;
+    let program = load_with_imports(path)?;
     let env = typecheck::check_program(&program)?;
 
     let context = Context::create();
@@ -59,6 +57,58 @@ fn drive(cmd: &str, path: &Path) -> Result<(), String> {
             cmd
         )),
     }
+}
+
+fn load_with_imports(entry: &Path) -> Result<ast::Program, String> {
+    let mut seen = std::collections::HashSet::<PathBuf>::new();
+    let mut items = Vec::new();
+    let mut stmts = Vec::new();
+    let entry_abs = fs::canonicalize(entry).map_err(|e| e.to_string())?;
+    load_file_recursive(&entry_abs, &entry_abs, &mut seen, &mut items, &mut stmts)?;
+    Ok(ast::Program { items, stmts })
+}
+
+fn load_file_recursive(
+    entry_abs: &Path,
+    path: &Path,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    items_out: &mut Vec<ast::Item>,
+    stmts_out: &mut Vec<ast::Stmt>,
+) -> Result<(), String> {
+    let abs = fs::canonicalize(path).map_err(|e| e.to_string())?;
+    if !seen.insert(abs.clone()) {
+        return Ok(());
+    }
+
+    let src = fs::read_to_string(&abs).map_err(|e| e.to_string())?;
+    let tokens = lexer::tokenize(&src)?;
+    let program = parser::Parser::new(tokens).parse_program()?;
+
+    // Recurse into imports.
+    for item in &program.items {
+        if let ast::Item::Import(rel) = item {
+            let child = abs
+                .parent()
+                .unwrap_or(entry_abs)
+                .join(rel);
+            load_file_recursive(entry_abs, &child, seen, items_out, stmts_out)?;
+        }
+    }
+
+    // Add all non-import items to the output.
+    for item in program.items {
+        match item {
+            ast::Item::Import(_) => {}
+            other => items_out.push(other),
+        }
+    }
+
+    // Only the entry file contributes top-level executable statements.
+    if abs == entry_abs {
+        stmts_out.extend(program.stmts);
+    }
+
+    Ok(())
 }
 
 fn run_via_clang(ir: &str) -> Result<(), String> {

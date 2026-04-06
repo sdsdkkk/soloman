@@ -1,6 +1,6 @@
 //! Recursive-descent parser.
 
-use crate::ast::{BinOp, Expr, Program, Stmt};
+use crate::ast::{BinOp, Expr, FnDef, Item, ObjDef, Param, Program, Stmt, Ty};
 use crate::lexer::{Token, TokenKind};
 
 pub struct Parser {
@@ -41,16 +41,27 @@ impl Parser {
     }
 
     pub fn parse_program(mut self) -> Result<Program, String> {
+        let mut items = Vec::new();
         let mut stmts = Vec::new();
         while !matches!(self.peek().kind, TokenKind::Eof) {
-            stmts.push(self.parse_stmt()?);
+            match self.peek().kind {
+                TokenKind::KwImport => items.push(self.parse_import()?),
+                TokenKind::KwFn => items.push(Item::Function(self.parse_fn_def()?)),
+                TokenKind::KwObject => items.push(Item::Object(self.parse_object_def()?)),
+                _ => stmts.push(self.parse_stmt()?),
+            }
         }
-        Ok(Program { stmts })
+        Ok(Program { items, stmts })
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         let line = self.peek().line;
         let col = self.peek().col;
+        match self.peek().kind {
+            TokenKind::KwLet => return self.parse_let_stmt(),
+            TokenKind::KwReturn => return self.parse_return_stmt(),
+            _ => {}
+        }
         if let TokenKind::Ident(name) = &self.peek().kind.clone() {
             let name = name.clone();
             if matches!(self.tokens.get(self.i + 1).map(|t| &t.kind), Some(TokenKind::Eq)) {
@@ -65,6 +76,188 @@ impl Parser {
         self.expect_semi()
             .map_err(|_| format!("{}:{}: expected ';' after statement", line, col))?;
         Ok(Stmt::Expr(e))
+    }
+
+    fn parse_import(&mut self) -> Result<Item, String> {
+        let t = self.bump(); // import
+        let TokenKind::KwImport = t.kind else {
+            return Err("internal".to_string());
+        };
+        let path = match self.bump().kind {
+            TokenKind::Str(s) => s,
+            other => {
+                return Err(format!(
+                    "{}:{}: expected string after import, found {:?}",
+                    self.peek().line,
+                    self.peek().col,
+                    other
+                ));
+            }
+        };
+        self.expect_semi()?;
+        Ok(Item::Import(path))
+    }
+
+    fn parse_fn_def(&mut self) -> Result<FnDef, String> {
+        let kw = self.bump(); // fn
+        let TokenKind::KwFn = kw.kind else {
+            return Err("internal".to_string());
+        };
+        let name = match self.bump().kind {
+            TokenKind::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "{}:{}: expected function name, found {:?}",
+                    kw.line, kw.col, other
+                ));
+            }
+        };
+        self.expect(TokenKind::LParen)?;
+        let mut params = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RParen) {
+            loop {
+                let pname = match self.bump().kind {
+                    TokenKind::Ident(s) => s,
+                    other => {
+                        return Err(format!(
+                            "{}:{}: expected parameter name, found {:?}",
+                            self.peek().line,
+                            self.peek().col,
+                            other
+                        ));
+                    }
+                };
+                self.expect(TokenKind::Colon)?;
+                let ty = self.parse_type()?;
+                params.push(Param { name: pname, ty });
+                if matches!(self.peek().kind, TokenKind::Comma) {
+                    self.bump();
+                    continue;
+                }
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        self.expect(TokenKind::Arrow)?;
+        let ret = self.parse_type()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut body = Vec::new();
+        while !matches!(self.peek().kind, TokenKind::RBrace) {
+            if matches!(self.peek().kind, TokenKind::Eof) {
+                return Err("unexpected EOF in function body".to_string());
+            }
+            body.push(self.parse_stmt()?);
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(FnDef {
+            name,
+            params,
+            ret,
+            body,
+        })
+    }
+
+    fn parse_object_def(&mut self) -> Result<ObjDef, String> {
+        let kw = self.bump(); // object
+        let TokenKind::KwObject = kw.kind else {
+            return Err("internal".to_string());
+        };
+        let name = match self.bump().kind {
+            TokenKind::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "{}:{}: expected object name, found {:?}",
+                    kw.line, kw.col, other
+                ));
+            }
+        };
+        self.expect(TokenKind::LBrace)?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek().kind, TokenKind::RBrace) {
+            let fname = match self.bump().kind {
+                TokenKind::Ident(s) => s,
+                other => {
+                    return Err(format!(
+                        "{}:{}: expected field name, found {:?}",
+                        self.peek().line,
+                        self.peek().col,
+                        other
+                    ));
+                }
+            };
+            self.expect(TokenKind::Colon)?;
+            let fty = self.parse_type()?;
+            self.expect_semi()?;
+            fields.push((fname, fty));
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(ObjDef { name, fields })
+    }
+
+    fn parse_let_stmt(&mut self) -> Result<Stmt, String> {
+        let kw = self.bump(); // let
+        let TokenKind::KwLet = kw.kind else {
+            return Err("internal".to_string());
+        };
+        let name = match self.bump().kind {
+            TokenKind::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "{}:{}: expected identifier after let, found {:?}",
+                    kw.line, kw.col, other
+                ));
+            }
+        };
+        self.expect(TokenKind::Colon)?;
+        let ty = self.parse_type()?;
+        self.expect(TokenKind::Eq)?;
+        let value = self.parse_expr()?;
+        self.expect_semi()?;
+        Ok(Stmt::Let { name, ty, value })
+    }
+
+    fn parse_return_stmt(&mut self) -> Result<Stmt, String> {
+        let kw = self.bump(); // return
+        let TokenKind::KwReturn = kw.kind else {
+            return Err("internal".to_string());
+        };
+        if matches!(self.peek().kind, TokenKind::Semi) {
+            self.bump();
+            return Ok(Stmt::Return(None));
+        }
+        let e = self.parse_expr()?;
+        self.expect_semi()?;
+        Ok(Stmt::Return(Some(e)))
+    }
+
+    fn parse_type(&mut self) -> Result<Ty, String> {
+        match self.bump().kind {
+            TokenKind::Ident(s) if s == "Int" => Ok(Ty::Int),
+            TokenKind::Ident(s) if s == "Str" => Ok(Ty::Str),
+            TokenKind::Ident(s) if s == "Unit" => Ok(Ty::Unit),
+            TokenKind::Ident(s) => Ok(Ty::Object(s)),
+            other => Err(format!(
+                "{}:{}: expected type name, found {:?}",
+                self.peek().line,
+                self.peek().col,
+                other
+            )),
+        }
+    }
+
+    fn expect(&mut self, k: TokenKind) -> Result<(), String> {
+        if std::mem::discriminant(&self.peek().kind) == std::mem::discriminant(&k) {
+            self.bump();
+            Ok(())
+        } else {
+            Err(format!(
+                "{}:{}: expected {:?}, found {:?}",
+                self.peek().line,
+                self.peek().col,
+                k,
+                self.peek().kind
+            ))
+        }
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
@@ -142,15 +335,15 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
         let t = self.peek().clone();
-        match t.kind {
+        let mut base = match t.kind {
             TokenKind::Int(n) => {
                 self.bump();
-                Ok(Expr::Int(n))
+                Expr::Int(n)
             }
             TokenKind::Str(ref s) => {
                 let s = s.clone();
                 self.bump();
-                Ok(Expr::Str(s))
+                Expr::Str(s)
             }
             TokenKind::Ident(name) => {
                 self.bump();
@@ -167,16 +360,48 @@ impl Parser {
                     match &self.peek().kind {
                         TokenKind::RParen => {
                             self.bump();
-                            Ok(Expr::Call { name, args })
+                            Expr::Call { name, args }
                         }
                         _ => Err(format!(
                             "{}:{}: expected ')' after arguments",
                             self.peek().line,
                             self.peek().col
-                        )),
+                        ))?,
+                    }
+                } else if matches!(self.peek().kind, TokenKind::LBrace) {
+                    // Object literal: Name{ field: expr, ... }
+                    self.bump();
+                    let mut fields = Vec::new();
+                    if !matches!(self.peek().kind, TokenKind::RBrace) {
+                        loop {
+                            let fname = match self.bump().kind {
+                                TokenKind::Ident(s) => s,
+                                other => {
+                                    return Err(format!(
+                                        "{}:{}: expected field name, found {:?}",
+                                        self.peek().line,
+                                        self.peek().col,
+                                        other
+                                    ));
+                                }
+                            };
+                            self.expect(TokenKind::Colon)?;
+                            let v = self.parse_expr()?;
+                            fields.push((fname, v));
+                            if matches!(self.peek().kind, TokenKind::Comma) {
+                                self.bump();
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                    self.expect(TokenKind::RBrace)?;
+                    Expr::ObjLit {
+                        object: name,
+                        fields,
                     }
                 } else {
-                    Ok(Expr::Var(name))
+                    Expr::Var(name)
                 }
             }
             TokenKind::LParen => {
@@ -185,19 +410,40 @@ impl Parser {
                 match &self.peek().kind {
                     TokenKind::RParen => {
                         self.bump();
-                        Ok(inner)
+                        inner
                     }
                     _ => Err(format!(
                         "{}:{}: expected ')'",
                         self.peek().line,
                         self.peek().col
-                    )),
+                    ))?,
                 }
             }
             _ => Err(format!(
                 "{}:{}: unexpected token {:?}",
                 t.line, t.col, t.kind
-            )),
+            ))?,
+        };
+
+        // postfix field access: expr.ident
+        while matches!(self.peek().kind, TokenKind::Dot) {
+            self.bump();
+            let name = match self.bump().kind {
+                TokenKind::Ident(s) => s,
+                other => {
+                    return Err(format!(
+                        "{}:{}: expected field name after '.', found {:?}",
+                        self.peek().line,
+                        self.peek().col,
+                        other
+                    ));
+                }
+            };
+            base = Expr::Field {
+                base: Box::new(base),
+                name,
+            };
         }
+        Ok(base)
     }
 }

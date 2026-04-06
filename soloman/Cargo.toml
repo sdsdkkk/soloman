@@ -1,0 +1,12 @@
+[package]
+name = "soloman"
+version = "0.1.0"
+edition = "2021"
+description = "Soloman programming language compiler (LLVM backend)"
+
+[dependencies]
+inkwell = { version = "0.8", features = ["llvm14-0"] }
+
+[[bin]]
+name = "soloman"
+path = "src/main.rs"

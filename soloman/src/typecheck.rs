@@ -361,3 +361,53 @@ fn check_call(name: &str, args: &[Expr], env: &TypeEnv, scope: &Scope) -> Result
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{lexer::tokenize, parser::Parser};
+
+    use super::check_program;
+
+    fn parse(src: &str) -> crate::ast::Program {
+        let toks = tokenize(src).expect("tokenize");
+        Parser::new(toks).parse_program().expect("parse")
+    }
+
+    #[test]
+    fn typecheck_accepts_valid_program() {
+        let p = parse(
+            r#"
+            object Point { x: Int; y: Int; }
+            fn sum(p: Point) -> Int { return p.x + p.y; }
+            fn hello(name: Str) -> Str { return name + "!"; }
+            let p: Point = Point{ x: 2, y: 3 };
+            let n: Int = sum(p);
+            print(n);
+            "#,
+        );
+        let env = check_program(&p).expect("typecheck");
+        assert!(env.objects.contains_key("Point"));
+        assert!(env.functions.contains_key("sum"));
+    }
+
+    #[test]
+    fn typecheck_rejects_assignment_type_mismatch() {
+        let p = parse("let n: Int = 1; n = \"x\";");
+        let err = check_program(&p).unwrap_err();
+        assert!(err.contains("cannot assign"));
+    }
+
+    #[test]
+    fn typecheck_rejects_bad_return_type() {
+        let p = parse("fn f() -> Int { return \"x\"; }");
+        let err = check_program(&p).unwrap_err();
+        assert!(err.contains("return type mismatch"));
+    }
+
+    #[test]
+    fn typecheck_rejects_unknown_object_type() {
+        let p = parse("fn f(x: Missing) -> Int { return 1; }");
+        let err = check_program(&p).unwrap_err();
+        assert!(err.contains("unknown object type"));
+    }
+}

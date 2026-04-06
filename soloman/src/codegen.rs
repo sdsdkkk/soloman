@@ -687,3 +687,52 @@ pub fn compile_to_ir(context: &Context, program: &Program, env: TypeEnv) -> Resu
     Ok(module.print_to_string().to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use inkwell::context::Context;
+
+    use crate::{lexer::tokenize, parser::Parser, typecheck::check_program};
+
+    use super::compile_to_ir;
+
+    fn compile(src: &str) -> String {
+        let toks = tokenize(src).expect("tokenize");
+        let program = Parser::new(toks).parse_program().expect("parse");
+        let env = check_program(&program).expect("typecheck");
+        let ctx = Context::create();
+        compile_to_ir(&ctx, &program, env).expect("ir")
+    }
+
+    #[test]
+    fn emits_ir_for_functions_and_objects() {
+        let ir = compile(
+            r#"
+            object Point { x: Int; y: Int; }
+            fn add(a: Int, b: Int) -> Int { return a + b; }
+            fn sum(p: Point) -> Int { return p.x + p.y; }
+            let p: Point = Point{ x: 3, y: 4 };
+            let n: Int = add(20, 22);
+            print(n);
+            print(sum(p));
+            "#,
+        );
+        assert!(ir.contains("define i32 @main()"));
+        assert!(ir.contains("define i64 @add"));
+        assert!(ir.contains("%Point = type"));
+    }
+
+    #[test]
+    fn emits_ir_for_string_concat_and_len() {
+        let ir = compile(
+            r#"
+            fn shout(s: Str) -> Str { return s + "!"; }
+            let x: Str = shout("ok");
+            let n: Int = len(x);
+            print(n);
+            "#,
+        );
+        assert!(ir.contains("@malloc"));
+        assert!(ir.contains("@strlen"));
+    }
+}
+

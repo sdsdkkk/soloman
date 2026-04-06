@@ -337,3 +337,38 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{tokenize, TokenKind};
+
+    #[test]
+    fn tokenizes_keywords_and_symbols() {
+        let src = r#"fn f(a: Int) -> Int { let x: Int = 1; return x; } object P { x: Int; } import "m.sol";"#;
+        let toks = tokenize(src).expect("tokenize");
+        let kinds: Vec<&TokenKind> = toks.iter().map(|t| &t.kind).collect();
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::KwFn)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::KwLet)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::KwReturn)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::KwObject)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::KwImport)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::Arrow)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::LBrace)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::RBrace)));
+        assert!(kinds.iter().any(|k| matches!(k, TokenKind::Colon)));
+    }
+
+    #[test]
+    fn tokenizes_comments_and_escapes() {
+        let src = "// c1\nlet s: Str = \"a\\n\\t\\\"b\\\"\"; // c2";
+        let toks = tokenize(src).expect("tokenize");
+        assert!(toks.iter().any(|t| matches!(t.kind, TokenKind::KwLet)));
+        assert!(toks.iter().any(|t| matches!(t.kind, TokenKind::Str(_))));
+    }
+
+    #[test]
+    fn errors_on_unterminated_string() {
+        let err = tokenize("let s: Str = \"oops;").unwrap_err();
+        assert!(err.contains("unterminated string"));
+    }
+}

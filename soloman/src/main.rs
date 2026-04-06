@@ -144,3 +144,34 @@ fn run_via_clang(ir: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::load_with_imports;
+
+    #[test]
+    fn load_with_imports_collects_items_from_modules() {
+        let base = std::env::temp_dir().join(format!("soloman_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("mods")).expect("mkdir");
+
+        fs::write(
+            base.join("mods/math.sol"),
+            "fn add(a: Int, b: Int) -> Int { return a + b; }",
+        )
+        .expect("write math");
+        fs::write(
+            base.join("main.sol"),
+            "import \"mods/math.sol\"; let n: Int = add(1, 2);",
+        )
+        .expect("write main");
+
+        let program = load_with_imports(&PathBuf::from(base.join("main.sol"))).expect("load");
+        assert!(!program.items.is_empty());
+        assert_eq!(program.stmts.len(), 1);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+}

@@ -447,3 +447,60 @@ impl Parser {
         Ok(base)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::{Expr, Item, Stmt, Ty};
+    use crate::lexer::tokenize;
+
+    use super::Parser;
+
+    fn parse(src: &str) -> crate::ast::Program {
+        let toks = tokenize(src).expect("tokenize");
+        Parser::new(toks).parse_program().expect("parse")
+    }
+
+    #[test]
+    fn parses_import_function_object_and_toplevel_stmt() {
+        let p = parse(
+            r#"
+            import "mods/a.sol";
+            object Point { x: Int; y: Int; }
+            fn add(a: Int, b: Int) -> Int { return a + b; }
+            let n: Int = add(1, 2);
+            "#,
+        );
+        assert_eq!(p.items.len(), 3);
+        assert_eq!(p.stmts.len(), 1);
+        assert!(matches!(p.items[0], Item::Import(_)));
+        assert!(matches!(p.items[1], Item::Object(_)));
+        assert!(matches!(p.items[2], Item::Function(_)));
+        assert!(matches!(p.stmts[0], Stmt::Let { .. }));
+    }
+
+    #[test]
+    fn parses_object_literal_and_field_access() {
+        let p = parse(
+            r#"
+            object P { x: Int; }
+            fn getx(p: P) -> Int { return p.x; }
+            let p: P = P{ x: 42 };
+            "#,
+        );
+        let Item::Function(f) = &p.items[1] else {
+            panic!("expected fn");
+        };
+        assert_eq!(f.params[0].ty, Ty::Object("P".to_string()));
+        match &f.body[0] {
+            Stmt::Return(Some(Expr::Field { .. })) => {}
+            other => panic!("unexpected body stmt: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parser_errors_for_missing_semi() {
+        let toks = tokenize("let x: Int = 1").expect("tokenize");
+        let err = Parser::new(toks).parse_program().unwrap_err();
+        assert!(err.contains("expected ';'"));
+    }
+}
